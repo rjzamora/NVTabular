@@ -299,7 +299,7 @@ class ParquetDatasetEngine(DatasetEngine):
                     metadata = md
             return metadata, base
 
-    @annotate("get_pieces", color="green", domain="nvt_python")
+    @annotate("pq_get_pieces", color="green", domain="nvt_python")
     def _get_pieces(self, metadata, data_path):
         # get the number of row groups per file
         file_row_groups = defaultdict(int)
@@ -319,7 +319,7 @@ class ParquetDatasetEngine(DatasetEngine):
         return pieces
 
     @staticmethod
-    @annotate("read_piece", color="green", domain="nvt_python")
+    @annotate("pq_read_piece", color="green", domain="nvt_python")
     def read_piece(piece, columns):
         path, row_groups = piece
         return cudf.io.read_parquet(
@@ -339,6 +339,66 @@ class ParquetDatasetEngine(DatasetEngine):
         name = "parquet-to-ddf-" + tokenize(pieces, columns)
         dsk = {
             (name, p): (ParquetDatasetEngine.read_piece, piece, columns)
+            for p, piece in enumerate(pieces)
+        }
+        meta = self.meta_empty(columns=columns)
+        divisions = [None] * (len(pieces) + 1)
+        return new_dd_object(dsk, name, meta, divisions)
+
+
+class ORCDatasetEngine(DatasetEngine):
+    def __init__(self, *args, stripes_per_part=None):
+        super().__init__(*args)
+        self._metadata = self.get_metadata()
+        self._pieces = None
+        if stripes_per_part is None:
+            path0 = self.fs.sep.join([self._base, self.paths[0]])
+            stripe_byte_size_0 = (
+                cudf.io.read_orc(path0, stripe=0).memory_usage(deep=True, index=True).sum()
+            )
+            self.stripes_per_part = int(self.part_size / stripe_byte_size_0)
+        else:
+            self.stripes_per_part = int(stripes_per_part)
+        assert self.stripes_per_part > 0
+
+    @property
+    def pieces(self):
+        if self._pieces is None:
+            self._pieces = self._get_pieces()
+        return self._pieces
+
+    def get_metadata(self):
+        if len(self.paths) == 1 and self.fs.isdir(self.paths[0]):
+            # This is a directory
+            raise TypeError("ORCDataset can not accept a directory (for now).")
+        return {path: cudf.read_orc_metadata(path)[1] for path in self.paths}
+
+    @annotate("orc_get_pieces", color="green", domain="nvt_python")
+    def _get_pieces(self):
+        # create pieces from each file, limiting the number of stripes in each piece
+        pieces = []
+        for filepath, stripe_count in self.metadata.items():
+            stripes = range(stripe_count)
+            for i in range(0, stripe_count, self.stripes_per_part):
+                stripe_list = list(stripes[i : i + self.stripes_per_part])
+                pieces.append((filepath, stripe_list))
+        return pieces
+
+    @staticmethod
+    @annotate("orc_read_piece", color="green", domain="nvt_python")
+    def read_piece(piece, columns):
+        path, stripes = piece
+        return cudf.io.read_orc(path, stripe=stripes[0], stripe_count=len(stripes), columns=columns)
+
+    def meta_empty(self, columns=None):
+        path, _ = self.pieces[0]
+        return cudf.io.read_orc(path, stripe=0, columns=columns).iloc[:0]
+
+    def to_ddf(self, columns=None):
+        pieces = self.pieces
+        name = "orc-to-ddf-" + tokenize(pieces, columns)
+        dsk = {
+            (name, p): (ORCDatasetEngine.read_piece, piece, columns)
             for p, piece in enumerate(pieces)
         }
         meta = self.meta_empty(columns=columns)
