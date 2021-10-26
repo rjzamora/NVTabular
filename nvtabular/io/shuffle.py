@@ -19,6 +19,8 @@ from distutils.version import LooseVersion
 
 import pandas as pd
 
+from nvtabular.dispatch import annotate
+
 _IGNORE_INDEX_SUPPORTED = pd.__version__ >= LooseVersion("1.3.0")
 
 
@@ -50,6 +52,7 @@ def _check_shuffle_arg(shuffle):
     return shuffle
 
 
+@annotate("shuffle", color="darkgreen", domain="nvt_python")
 def _shuffle_df(df, size=None, keep_index=False):
     """Shuffles a DataFrame, returning a new dataframe with randomly
     ordered rows"""

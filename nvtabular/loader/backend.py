@@ -72,9 +72,11 @@ class ChunkQueue:
     def empty(self):
         return self.q_out.empty()
 
+    @annotate("get_chunk", color="darkgreen", domain="nvt_python")
     def get(self):
         return self.q_out.get()
 
+    @annotate("put_chunk", color="darkgreen", domain="nvt_python")
     def put(self, packet):
         while True:
             if self.stopped:
@@ -86,6 +88,10 @@ class ChunkQueue:
             except queue.Full:
                 continue
 
+    @annotate("get_next", color="darkgreen", domain="nvt_python")
+    def get_next(self, itr):
+        return next(itr)
+
     @annotate("batch", color="darkgreen", domain="nvt_python")
     def batch(self, itr):
         """
@@ -95,7 +101,7 @@ class ChunkQueue:
         current = []
         while True:
             try:
-                value = next(itr)
+                value = self.get_next(itr)
             except StopIteration:
                 if len(current) > 0:
                     yield current
@@ -109,6 +115,7 @@ class ChunkQueue:
     @annotate("chunk_logic", color="darkgreen", domain="nvt_python")
     def chunk_logic(self, itr):
         spill = None
+        # spilled = []
         for chunks in self.batch(itr):
             if self.stopped:
                 return
@@ -122,6 +129,17 @@ class ChunkQueue:
             if self.shuffle:
                 chunks = _shuffle_df(chunks)
 
+            # # If we have data spilled over from previous chunk,
+            # # use the head of this chunk to serve a complete batch
+            # if spill and not spill.empty:
+            #     residual = self.dataloader.batch_size - len(spill)
+            #     spill = _concat([spill, chunks.iloc[:residual]], ignore_index=True)
+            #     spill = self.dataloader.make_tensors(spill, self.dataloader._use_nnz)
+            #     if self.put(spill):
+            #         return
+            #     chunks = chunks.iloc[residual:]
+            #     spill = None
+
             if len(chunks) > 0:
                 chunks = self.dataloader.make_tensors(chunks, self.dataloader._use_nnz)
                 # put returns True if buffer is stopped before
@@ -130,10 +148,29 @@ class ChunkQueue:
                 if self.put(chunks):
                     return
             chunks = None
+
+            # spilled.append(spill)
+            # spill = None
+            # if sum([len(x) for x in spilled]) >= self.dataloader.batch_size:
+            #     spilled = _concat(spilled, ignore_index=True)
+            #     spilled.reset_index(drop=True, inplace=True)
+            #     spilled, spill = self.get_batch_div_chunk(spilled, self.dataloader.batch_size)
+            #     spilled = self.dataloader.make_tensors(spilled, self.dataloader._use_nnz)
+            #     if self.put(spilled):
+            #         return
+            #     spilled = [spill]
+            #     spill = None
+
         # takes care final batch, which is less than batch size
         if not self.dataloader.drop_last and spill is not None and not spill.empty:
             spill = self.dataloader.make_tensors(spill, self.dataloader._use_nnz)
             self.put(spill)
+
+        # if spilled:
+        #     spilled = _concat(spilled, ignore_index=True)
+        #     spilled.reset_index(drop=True, inplace=True)
+        #     spilled = self.dataloader.make_tensors(spilled, self.dataloader._use_nnz)
+        #     self.put(spilled)
 
     @annotate("load_chunks", color="darkgreen", domain="nvt_python")
     def load_chunks(self, dev):
@@ -158,11 +195,15 @@ class ChunkQueue:
     def start(self):
         self._stop_event.clear()
 
+    @annotate("get_batch_div_chunk", color="darkgreen", domain="nvt_python")
     def get_batch_div_chunk(self, chunks, batch_size):
+        # return chunks, None
         # TODO: is there a way to do this using cupy?
         spill_idx = int(chunks.shape[0] / batch_size) * batch_size
-        spill = _make_df(chunks.iloc[spill_idx:])
-        chunks = _make_df(chunks.iloc[:spill_idx])
+        # spill = _make_df(chunks.iloc[spill_idx:])
+        # chunks = _make_df(chunks.iloc[:spill_idx])
+        spill = chunks.iloc[spill_idx:]
+        chunks = chunks.iloc[:spill_idx]
         if not chunks.empty:
             chunks.reset_index(drop=True, inplace=True)
         if not spill.empty:

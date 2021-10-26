@@ -391,6 +391,7 @@ def _to_arrow(x):
         return x.to_arrow()
 
 
+@annotate("concat", color="darkgreen", domain="nvt_python")
 def _concat(objs, **kwargs):
     if isinstance(objs[0], (pd.DataFrame, pd.Series)):
         return pd.concat(objs, **kwargs)
@@ -398,6 +399,7 @@ def _concat(objs, **kwargs):
         return cudf.core.reshape.concat(objs, **kwargs)
 
 
+@annotate("make_df", color="darkgreen", domain="nvt_python")
 def _make_df(_like_df=None, device=None):
     if not cudf or isinstance(_like_df, (pd.DataFrame, pd.Series)):
         return pd.DataFrame(_like_df)

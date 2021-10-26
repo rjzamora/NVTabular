@@ -651,6 +651,7 @@ class Dataset:
             indices=indices,
             partition_lens=partition_lens_meta,
             epochs=epochs,
+            client=self.client,
         )
 
     def to_parquet(
@@ -1180,12 +1181,13 @@ def _set_dtypes(chunk, dtypes):
 
 
 class DataFrameIter:
-    def __init__(self, ddf, columns=None, indices=None, partition_lens=None, epochs=1):
+    def __init__(self, ddf, columns=None, indices=None, partition_lens=None, epochs=1, client=None):
         self.indices = indices if isinstance(indices, list) else range(ddf.npartitions)
         self._ddf = ddf
         self.columns = columns
         self.partition_lens = partition_lens
         self.epochs = epochs
+        self.client = client
 
     def __len__(self):
         if self.partition_lens:
@@ -1203,7 +1205,13 @@ class DataFrameIter:
             for i in self.indices:
                 part = self._ddf.get_partition(i)
                 if self.columns:
-                    yield part[self.columns].compute(scheduler="synchronous")
+                    if self.client is None:
+                        yield part[self.columns].compute(scheduler="synchronous")
+                    else:
+                        yield part[self.columns].compute()
                 else:
-                    yield part.compute(scheduler="synchronous")
+                    if self.client is None:
+                        yield part.compute(scheduler="synchronous")
+                    else:
+                        yield part.compute()
         part = None
