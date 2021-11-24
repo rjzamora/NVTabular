@@ -23,9 +23,15 @@ import fsspec
 import numpy as np
 from pyarrow import parquet as pq
 
-if LooseVersion(fsspec.__version__).version[:3] > [2021, 11, 0]:
+if LooseVersion(fsspec.__version__).version[:3] >= [2021, 11, 0]:
     import fsspec.parquet as fsspec_parquet
+
+    try:
+        from fsspec.parquet import _get_parquet_byte_ranges as _get_parquet_byte_ranges_fsspec
+    except ImportError:
+        pass
 else:
+    _get_parquet_byte_ranges_fsspec = None
     fsspec_parquet = None
 
 try:
@@ -171,6 +177,29 @@ def _optimized_read_remote(path, row_groups, columns, fs, **kwargs):
                 use_python_file_object=True,
                 **read_kwargs,
             )
+    elif _get_parquet_byte_ranges_fsspec and use_fsspec_parquet:
+        # Old version of cudf, but newer version of fsspec.
+        # Use _get_parquet_byte_ranges_fsspec to move the data
+        return cudf.read_parquet(
+            # Wrap in BytesIO since cudf will sometimes use
+            # pyarrow to parse the metadata (and pyarrow
+            # cannot read from a bytes object)
+            # io.BytesIO(
+            # Transfer the required bytes with fsspec
+            _fsspec_data_transfer_upstream(
+                path,
+                fs,
+                columns,
+                row_groups,
+                **use_fsspec_parquet_kwargs,
+            ),
+            # ),
+            engine="cudf",
+            columns=columns,
+            row_groups=row_groups,
+            strings_to_categorical=strings_to_cats,
+            **read_kwargs,
+        )
     else:
         # Get byte-ranges that are known to contain the
         # required data for this read
@@ -182,18 +211,18 @@ def _optimized_read_remote(path, row_groups, columns, fs, **kwargs):
             # Wrap in BytesIO since cudf will sometimes use
             # pyarrow to parse the metadata (and pyarrow
             # cannot read from a bytes object)
-            io.BytesIO(
-                # Transfer the required bytes with fsspec
-                _fsspec_data_transfer(
-                    path,
-                    fs,
-                    byte_ranges=byte_ranges,
-                    footer=footer,
-                    file_size=file_size,
-                    add_par1_magic=True,
-                    **user_kwargs,
-                )
+            # io.BytesIO(
+            # Transfer the required bytes with fsspec
+            _fsspec_data_transfer(
+                path,
+                fs,
+                byte_ranges=byte_ranges,
+                footer=footer,
+                file_size=file_size,
+                add_par1_magic=True,
+                **user_kwargs,
             ),
+            # ),
             engine="cudf",
             columns=columns,
             row_groups=row_groups,
@@ -270,6 +299,28 @@ def _get_parquet_byte_ranges(
 #
 
 
+def _fsspec_data_transfer_upstream(
+    path,
+    fs,
+    columns,
+    row_groups,
+    **use_fsspec_parquet_kwargs,
+):
+    data = _get_parquet_byte_ranges_fsspec(
+        [path],
+        fs,
+        columns=columns,
+        row_groups=row_groups,
+        engine="pyarrow",
+        **use_fsspec_parquet_kwargs,
+    )
+    data = data.get(next(iter(data)), {})
+    buf = np.zeros(fs.size(path), dtype="b")
+    for start, end in list(data.keys()):
+        buf[start:end] = np.frombuffer(data.pop((start, end)), dtype="b")
+    return io.BytesIO(buf)  # .tobytes()
+
+
 def _fsspec_data_transfer(
     path_or_fob,
     fs,
@@ -334,7 +385,7 @@ def _fsspec_data_transfer(
             **kwargs,
         )
 
-    return buf.tobytes()
+    return io.BytesIO(buf)  # .tobytes()
 
 
 def _merge_ranges(byte_ranges, max_block=256_000_000, max_gap=64_000):
