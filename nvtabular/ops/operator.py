@@ -22,6 +22,11 @@ from merlin.dag import (  # noqa pylint: disable=unused-import
 
 # Avoid TENSOR_TABLE by default (for now)
 class Operator(BaseOperator):
+    _tensor_table_support = False
+
     @property
     def supported_formats(self):
-        return DataFormats.PANDAS_DATAFRAME | DataFormats.CUDF_DATAFRAME
+        supported = DataFormats.PANDAS_DATAFRAME | DataFormats.CUDF_DATAFRAME
+        if self._tensor_table_support:
+            supported = supported | DataFormats.NUMPY_TENSOR_TABLE | DataFormats.CUPY_TENSOR_TABLE
+        return supported

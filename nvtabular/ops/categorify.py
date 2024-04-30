@@ -203,6 +203,8 @@ class Categorify(StatOperator):
         within NVTabular, and does not guarantee that the memory limit will be satisfied.
     """
 
+    _tensor_table_support = True
+
     def __init__(
         self,
         freq_threshold=0,

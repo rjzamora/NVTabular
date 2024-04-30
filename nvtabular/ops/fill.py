@@ -39,6 +39,8 @@ class FillMissing(Operator):
         When True, adds binary columns that indicate whether cells in each column were filled
     """
 
+    _tensor_table_support = True
+
     def __init__(self, fill_val=0, add_binary_cols=False):
         super().__init__()
         self.fill_val = fill_val
